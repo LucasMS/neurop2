@@ -1,0 +1,329 @@
+---
+title: "Is there an effect of exposure in each group?"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      code: hide
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+
+
+# Objective
+
+Investigate whether there was a change between visits *within* each group. To recap, we have two main groups based on treatment:
+
+
+1. Untreated
+2. AtopiControl
+
+We also have two Visits:
+
+1. Before (visit 3)
+3. After (visit 5)
+
+I will investigate changes at the ASV level. To reduce multiple test issues, I will only test the differences in the 5 most abundant Staphylococcus ASVs.
+
+
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.01
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE,
+               warning = F,
+               message = F)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 14))
+
+# Set seed for reproducibility
+set.seed(13)
+# Color blind friendly pallet
+cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+          "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+
+scale_fill_discrete <- function(...) {
+  scale_fill_manual(..., values = cbp1)
+}
+scale_colour_discrete <- function(...) {
+  scale_colour_manual(..., values = cbp1)
+}
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(broom)
+library(reshape2)
+library(RColorBrewer)
+library(ggrepel)
+library(scales)
+library(DESeq2)
+```
+
+## Import data
+```{r}
+data.folder <- "../data"
+
+micro <- "micro.rds" %>% 
+  paste0(data.folder, "/", .) %>% 
+  readRDS()
+
+micro.r <- "micro.r.rds" %>% 
+  paste0(data.folder, "/", .) %>% 
+  readRDS()
+
+meta <- "meta.rds" %>% 
+  paste0(data.folder, "/", .) %>% 
+  readRDS() %>% 
+  mutate(Treatment = factor(Treatment, levels = c("Untreated",
+                                                  "AtopiControl")))
+
+tax <- "tax.rds" %>% 
+  paste0(data.folder, "/", .) %>% 
+  readRDS()
+```
+
+
+# Get most abundant ASVs
+
+
+```{r}
+micro.st <- micro.r %>% 
+  rownames_to_column("NGS_ID") %>% 
+  select(tax$ASV, NGS_ID) %>% 
+  melt(variable.name = "ASV", value.name = "Value") %>% 
+  left_join(tax %>% select(ASV, Genus, Species), by = "ASV") %>% 
+  mutate(Value = (Value * 100)/10000) %>% 
+  group_by(Genus, Species, ASV) %>% 
+  summarise(rel.abundance = mean(Value),
+            rel.abundance.sd = sd(Value)) %>%
+  ungroup() %>% 
+  mutate(rank = rank(-rel.abundance)) %>% 
+  mutate(Species = if_else(str_detect(Species, "unc."),
+                           Species,
+                           paste(Genus, Species)))
+
+
+asv.to.keep <- micro.st %>% 
+  ungroup %>% 
+  filter(Genus == "Staphylococcus") %>% 
+  arrange(rank) %>% 
+  top_n(5, rel.abundance) %>% 
+  pull(ASV)
+
+asv.staphy <- micro.st %>% 
+  ungroup %>% 
+  filter(Genus == "Staphylococcus") %>% 
+  pull(ASV)
+
+
+ggplot(micro.st, aes(rank, rel.abundance, label = ASV)) +
+  geom_point(data = micro.st %>% 
+               filter(ASV %in% asv.staphy), aes(color = Species), size =3) +
+  ggrepel::geom_text_repel(data = micro.st %>% 
+               filter(ASV %in% asv.to.keep)) +
+  geom_hline(yintercept = 1) +
+  theme(legend.position = "right") +
+  geom_point(data = micro.st %>% 
+               filter(!ASV %in% asv.staphy), color = "black") +
+  labs(x = "Rank", y = "Abundance (%)")
+
+```
+
+# Which percentage the top 5 Staphylococcus ASVs represents of the total sequences? 
+
+```{r}
+total.sum <- micro.r %>% sum()
+micro.r %>% 
+  rownames_to_column("NGS_ID") %>% 
+  select(tax$ASV, NGS_ID) %>% 
+  melt(variable.name = "ASV", value.name = "Value") %>% 
+  left_join(tax %>% select(ASV, Genus, Species), by = "ASV") %>% 
+  filter(ASV %in% asv.to.keep) %>% 
+  summarize(sum = sum(Value),
+            total.sum = total.sum) %>% 
+  mutate(percentage = (sum *100)/ total.sum) %>% 
+  pull(percentage) %>% 
+  print()
+```
+
+# Test
+## Function
+
+Design is: ~ Individuals + Visit. I am interested in the effect of visit. Individuals are included in the formula to control for paired samples. 
+
+```{r}
+test.deseq <- function(micro, meta, asv.to.keep, treatment){
+  meta <- meta %>% 
+    filter(Treatment == treatment) %>% 
+    mutate(Visit = sub(" ", "_", Visit)) %>% 
+    mutate(Visit = factor(Visit, levels = c("Day_3","Day_5")))
+  micro <- micro %>% 
+    rownames_to_column("NGS_ID") %>% 
+    right_join(meta %>% select(NGS_ID), by = "NGS_ID") %>% 
+    column_to_rownames("NGS_ID")
+  
+  
+  # Transform
+  micro.t <- t(micro) %>% 
+    data.frame()
+  
+  # build DESeq object
+  dds <- DESeqDataSetFromMatrix(countData = micro.t,
+                                colData = meta,
+                                design = ~ Ind + Visit)
+  #Estimate size 
+  dds <- estimateSizeFactors(dds, "poscounts") 
+  
+  # Keep only most abundant genus
+  
+  idx <- rownames(micro.t) %in% asv.to.keep
+  names(idx) <- rownames(micro.t)
+  dds <- dds[idx,]
+  
+  # Perform test
+  dds <- DESeq(dds, reduced = ~ Ind, test = "LRT")
+  # Get results
+  res <- results(dds, independentFiltering = F,  tidy = T) %>% 
+    mutate(Treatment = treatment)
+  return(res)
+}
+
+
+```
+
+## Perform test
+```{r}
+res <- bind_rows(test.deseq(micro, meta, asv.to.keep, "Untreated"),
+                 test.deseq(micro, meta, asv.to.keep, "AtopiControl")) %>% 
+  dplyr::rename("ASV" = "row")
+```
+
+## Annotate results
+```{r}
+res <- res %>% left_join(tax, by = "ASV") %>% select(ASV, Treatment, pvalue, Species, everything())
+
+```
+
+# Visualization
+
+```{r}
+micro.st <- micro.r %>% 
+  rownames_to_column("NGS_ID") %>% 
+  select(tax$ASV, NGS_ID) %>% 
+  melt(variable.name = "ASV", value.name = "Value") %>% 
+  left_join(meta %>% select(Ind, Visit, Treatment, NGS_ID), by = "NGS_ID") %>% 
+  filter(ASV %in% asv.to.keep) %>% 
+  left_join(tax %>% select(ASV, Genus, Species), by ="ASV") %>% 
+  mutate(Species = if_else(str_detect(Species, "unc."),
+                           Species,
+                           paste("S.", Species))) %>% 
+  mutate(ASV.order = gsub("ASV", "", ASV) %>%  as.numeric) %>% 
+  arrange(ASV.order) %>% 
+  mutate(ASV = paste0(Species, " ", gsub("ASV", "", ASV))) %>% 
+  mutate(ASV = factor(ASV, levels = unique(ASV))) %>% 
+  mutate(Visit.plot = if_else(Treatment == "AtopiControl",
+                              paste0("  ", Visit),
+                              paste0(" ", Visit)))
+
+```
+
+
+## Make label
+
+```{r}
+label <- res %>% 
+  filter(pvalue < 0.05) %>% 
+  mutate(label = "*",
+         hjustvar = 0,
+         vjustvar = 1.1,
+         xpos = -Inf,
+         ypos = Inf,
+         annotateText = paste0(" p: ", round(pvalue, 3))) %>%
+  mutate(ASV = paste0(Species, " ", gsub("ASV", "", ASV))) %>% 
+  mutate(ASV = factor(ASV, levels = unique(ASV))) %>% 
+  mutate(hjustvar = if_else(Treatment == "AtopiControl",
+                            0,
+                            1.1),
+         xpos = if_else(Treatment == "AtopiControl",
+                            -Inf,
+                            Inf))
+```
+## Plot
+```{r, fig.width= 10}
+p <- ggplot(micro.st, aes(Visit.plot, Value+0.1)) +
+  geom_point(aes(color = Treatment)) +
+  facet_wrap(~ ASV, ncol = 5) +
+  theme(strip.text.y.right = element_text(angle = 0, hjust = 0)) +
+  scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x),
+                labels = trans_format("log10", math_format(10^.x))) +
+  geom_path(color = "grey70", aes(group = Ind),
+            stat = "identity",
+            size = 0.5, alpha = 0.9) +
+  scale_color_manual(values = c( "black", "red")) +
+    ggpubr::theme_pubr() +
+  labs(y = "Counts (total 10K)",  x = "") +
+  geom_text(data = label, aes(x = xpos, y = ypos,
+                              hjust = hjustvar,
+                              vjust = vjustvar,
+                              label = annotateText,
+                              col = Treatment)) +
+  ggpubr::rotate_x_text() +
+    theme(legend.position = "bottom")
+
+p
+```
+# Save output
+
+```{r}
+paste0(d.out, "/", "asvs.rds") %>% 
+  saveRDS(p,.)
+
+writexl::write_xlsx(res, paste0(d.out, "/", "ASV.results.xlsx"))
+```
+
+
+# Conclusion
+
+# Session information
+
+```{r}
+sessionInfo()
+```

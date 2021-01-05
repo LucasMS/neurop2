@@ -1,0 +1,243 @@
+---
+title: "Is there an effect of exposure in each group?"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      code: hide
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+
+
+# Objective
+
+Investigate whether there was a change between visits *within* each group. To recap, we have two main groups based on treatment:
+
+
+1. Untreated
+2. AtopiControl
+
+We also have two Visits:
+
+1. Before (visit 3)
+3. After (visit 5)
+
+I will investigate changes at the community level.
+
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.01
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE,
+               warning = F,
+               message = F)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 14))
+
+# Set seed for reproducibility
+set.seed(13)
+# Color blind friendly pallet
+cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+          "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+
+scale_fill_discrete <- function(...) {
+  scale_fill_manual(..., values = cbp1)
+}
+scale_colour_discrete <- function(...) {
+  scale_colour_manual(..., values = cbp1)
+}
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(broom)
+library(reshape2)
+library(RColorBrewer)
+library(ggrepel)
+library(vegan)
+library(spaa)
+```
+
+## Import data
+```{r}
+data.folder <- "../data"
+
+micro <- "micro.r.rds" %>% 
+  paste0(data.folder, "/", .) %>% 
+  readRDS()
+
+meta <- "meta.rds" %>% 
+  paste0(data.folder, "/", .) %>% 
+  readRDS() %>% 
+  mutate(Treatment = factor(Treatment, levels = c("Untreated",
+                                          "AtopiControl")))
+
+tax <- "tax.rds" %>% 
+  paste0(data.folder, "/", .) %>% 
+  readRDS()
+```
+
+# Test effect of visit using adonis2
+
+
+Design is: ~ Individuals + Visit. I am interested in the effect of visit. Individuals are included in the formula to control for paired samples.
+## Function
+```{r}
+test.adonis <- function(meta, micro, group){
+meta.test <- meta %>% 
+  filter(Treatment == !!group)
+
+micro.test <- meta.test %>%
+  select(NGS_ID) %>% 
+  left_join(micro %>% 
+              rownames_to_column("NGS_ID"), by = "NGS_ID") %>% 
+  column_to_rownames("NGS_ID")
+
+micro.test.dist <-  micro.test %>%
+  vegdist("bray")
+
+adonis2(micro.test.dist ~ Ind + Visit, data = meta.test, by = "terms")}
+```
+
+## AtopiControl
+
+```{r}
+test.adonis(meta, micro, "AtopiControl")
+```
+
+## Untreat
+
+```{r}
+test.adonis(meta, micro, "Untreated")
+```
+
+# Visualize beta diversity
+
+## Calculate MDS
+```{r}
+micro.dis <- micro %>%
+  vegdist("bray")
+mds <- micro.dis %>% 
+  metaMDS(.,autotransform = F, trymax = 50)
+```
+
+## Plot MDS
+
+```{r}
+to.plot <- mds$points %>%
+  data.frame() %>% 
+  rownames_to_column("NGS_ID") %>% 
+  inner_join(meta, by = "NGS_ID") %>% 
+  mutate(Treatment = factor(Treatment, levels = Treatment %>% 
+                              as.character %>% 
+                              unique() %>%
+                              rev()) )
+
+p0 <- ggplot(to.plot, aes(MDS1, MDS2)) +
+  geom_point(aes(color = Visit)) + 
+  facet_wrap(~Treatment) +
+  stat_ellipse(aes(color = Visit)) +
+  geom_path(color = "grey70", aes(group = Ind),
+            stat = "identity",
+            size = 0.5, alpha = 0.9) +
+    ggpubr::theme_pubr() +
+  theme(legend.position = "bottom")
+p0
+```
+
+# Compare pairwise beta diversity
+
+Now, I want to test if the dissimilarities between visits are different between groups.
+
+## Get pairwise dissimilarities
+```{r}
+pair <- dist2list(micro.dis) %>% 
+  left_join(meta %>% select(NGS_ID, Ind, Treatment), by = c("col" = "NGS_ID")) %>% 
+  left_join(meta %>% select(NGS_ID, Ind), by = c("row" = "NGS_ID")) %>% 
+  #remove instance of the same sample
+  filter(row != col) %>% 
+  # Keep only distances between the same individual
+  filter(Ind.x == Ind.y) %>% 
+  #remove duplicated data
+  select(Ind.x, Treatment, value) %>% 
+  unique() %>% 
+  rename("Ind" = "Ind.x") %>% 
+  arrange(Treatment) %>% 
+  mutate(Treatment = factor(Treatment, levels = Treatment %>% 
+                              as.character %>% 
+                              unique() %>%
+                              rev()) )
+```
+
+## Test and visualize
+
+```{r}
+p <- ggpubr::ggboxplot(pair, x = "Treatment", y = "value", add = "jitter", color = "Treatment")+
+  ggpubr::stat_compare_means(paired = F, label.x = 0.9, label = "p.format") +
+  labs(y = "Bray-Curtis dissimilarity\n(intra-individual)") +
+  theme(legend.position = "none") +
+  ggpubr::rotate_x_text()
+p <- ggpubr::set_palette(p, palette = c("red", "black"))
+p
+
+wilcox.test(value ~ Treatment, data = pair)
+```
+
+# Combine figure
+
+```{r}
+comb <- ggpubr::ggarrange(p0, p, widths = c(2,1), labels = "auto")
+comb
+```
+
+# Save
+
+```{r}
+paste0(d.out, "/", "beta.rds") %>% 
+  saveRDS(comb,.)
+```
+
+
+# Session information
+
+```{r}
+sessionInfo()
+```
