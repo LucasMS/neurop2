@@ -115,7 +115,63 @@ tax <- "tax.rds" %>%
   readRDS()
 ```
 
-# Test effect of visit using adonis2
+
+# Alpha
+
+## Calculate
+```{r}
+meta <- diversity(micro, "shannon") %>% data.frame( NGS_ID = names(.),
+                                                            Shannon = .) %>% 
+  full_join(meta, by = "NGS_ID")
+```
+
+## Make tests
+```{r}
+group <- "Treatment"
+df <- meta %>% 
+  filter(Treatment  == "Treatment") %>% 
+  select(Visit, Ind, Shannon, Treatment) %>% 
+  arrange(Visit, Ind)
+wilcox.test(Shannon ~ Visit, data = df,  paired = T)
+
+group <- "Control"
+df <- meta %>% 
+  filter(Treatment  == "Control") %>% 
+  select(Visit, Ind, Shannon, Treatment) %>% 
+  arrange(Visit, Ind)
+
+wilcox.test(Shannon ~ Visit, data = df,  paired = T)
+
+```
+
+## Plot
+
+```{r}
+to.plot <- meta %>% 
+  arrange(Visit, Ind, Treatment) %>%
+  mutate(Treatment = factor(Treatment, levels = c("Treatment", "Control")))
+p1 <- ggpubr::ggboxplot(to.plot,
+                       x = "Visit",
+                       y = "Shannon",
+                       add = "point",
+                       color = "Treatment",
+                       facet.by = "Treatment") +
+  ggpubr::stat_compare_means(paired = T, label.x = 0.9, label = "p.format") +
+   theme(legend.position = "none") 
+p1 <- ggpubr::set_palette(p1, palette = c("red", "black")) +
+  geom_path(color = "grey70", aes(group = Ind),
+            stat = "identity",
+            size = 0.5, alpha = 0.9) +
+   ggpubr::theme_pubr() +
+  theme(legend.position = "none") +
+  ggpubr::rotate_x_text()
+p1
+```
+
+
+# Beta
+
+## Test effect of visit using adonis2
 
 
 Design is: ~ Individuals + Visit. I am interested in the effect of visit. Individuals are included in the formula to control for paired samples.
@@ -137,21 +193,21 @@ micro.test.dist <-  micro.test %>%
 adonis2(micro.test.dist ~ Ind + Visit, data = meta.test, by = "terms")}
 ```
 
-## Treatment
+### Treatment
 
 ```{r}
 test.adonis(meta, micro, "Treatment")
 ```
 
-## Untreat
+### Untreat
 
 ```{r}
 test.adonis(meta, micro, "Control")
 ```
 
-# Visualize beta diversity
+## Visualize beta diversity
 
-## Calculate MDS
+### Calculate MDS
 ```{r}
 micro.dis <- micro %>%
   vegdist("bray")
@@ -159,7 +215,7 @@ mds <- micro.dis %>%
   metaMDS(.,autotransform = F, trymax = 50)
 ```
 
-## Plot MDS
+### Plot MDS
 
 ```{r}
 to.plot <- mds$points %>%
@@ -183,7 +239,7 @@ p0 <- ggplot(to.plot, aes(MDS1, MDS2)) +
 p0
 ```
 
-# Compare pairwise beta diversity
+## Compare pairwise beta diversity
 
 Now, I want to test if the dissimilarities between visits are different between groups.
 
@@ -207,7 +263,7 @@ pair <- dist2list(micro.dis) %>%
                               rev()) )
 ```
 
-## Test and visualize
+### Test and visualize
 
 ```{r}
 p <- ggpubr::ggboxplot(pair, x = "Treatment", y = "value", add = "jitter", color = "Treatment")+
@@ -224,14 +280,14 @@ wilcox.test(value ~ Treatment, data = pair)
 # Combine figure
 
 ```{r}
-comb <- ggpubr::ggarrange(p0, p, widths = c(2,1), labels = "auto")
+comb <- ggpubr::ggarrange(p1, p0, p, nrow = 1, widths = c(1,2,1), labels = "auto")
 comb
 ```
 
 # Save
 
 ```{r}
-paste0(d.out, "/", "beta.rds") %>% 
+paste0(d.out, "/", "alpha.beta.rds") %>% 
   saveRDS(comb,.)
 ```
 
