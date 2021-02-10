@@ -24,8 +24,8 @@ params:
 Investigate whether there was a change between visits *within* each group. To recap, we have two main groups based on treatment:
 
 
-1. Untreated
-2. AtopiControl
+1. Control
+2. Treatment
 
 We also have two Visits:
 
@@ -112,8 +112,8 @@ micro.r <- "micro.r.rds" %>%
 meta <- "meta.rds" %>% 
   paste0(data.folder, "/", .) %>% 
   readRDS() %>% 
-  mutate(Treatment = factor(Treatment, levels = c("Untreated",
-                                                  "AtopiControl")))
+  mutate(Treatment = factor(Treatment, levels = c("Control",
+                                                  "Treatment")))
 
 tax <- "tax.rds" %>% 
   paste0(data.folder, "/", .) %>% 
@@ -231,8 +231,8 @@ test.deseq <- function(micro, meta, asv.to.keep, treatment){
 
 ## Perform test
 ```{r}
-res <- bind_rows(test.deseq(micro, meta, asv.to.keep, "Untreated"),
-                 test.deseq(micro, meta, asv.to.keep, "AtopiControl")) %>% 
+res <- bind_rows(test.deseq(micro, meta, asv.to.keep, "Control"),
+                 test.deseq(micro, meta, asv.to.keep, "Treatment")) %>% 
   dplyr::rename("ASV" = "row")
 ```
 
@@ -259,7 +259,7 @@ micro.st <- micro.r %>%
   arrange(ASV.order) %>% 
   mutate(ASV = paste0(Species, " ", gsub("ASV", "", ASV))) %>% 
   mutate(ASV = factor(ASV, levels = unique(ASV))) %>% 
-  mutate(Visit.plot = if_else(Treatment == "AtopiControl",
+  mutate(Visit.plot = if_else(Treatment == "Treatment",
                               paste0("  ", Visit),
                               paste0(" ", Visit)))
 
@@ -279,10 +279,10 @@ label <- res %>%
          annotateText = paste0(" p: ", round(pvalue, 3))) %>%
   mutate(ASV = paste0(Species, " ", gsub("ASV", "", ASV))) %>% 
   mutate(ASV = factor(ASV, levels = unique(ASV))) %>% 
-  mutate(hjustvar = if_else(Treatment == "AtopiControl",
+  mutate(hjustvar = if_else(Treatment == "Treatment",
                             0,
                             1.1),
-         xpos = if_else(Treatment == "AtopiControl",
+         xpos = if_else(Treatment == "Treatment",
                             -Inf,
                             Inf))
 ```

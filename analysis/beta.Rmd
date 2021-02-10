@@ -24,8 +24,8 @@ params:
 Investigate whether there was a change between visits *within* each group. To recap, we have two main groups based on treatment:
 
 
-1. Untreated
-2. AtopiControl
+1. Control
+2. Treatment
 
 We also have two Visits:
 
@@ -107,8 +107,8 @@ micro <- "micro.r.rds" %>%
 meta <- "meta.rds" %>% 
   paste0(data.folder, "/", .) %>% 
   readRDS() %>% 
-  mutate(Treatment = factor(Treatment, levels = c("Untreated",
-                                          "AtopiControl")))
+  mutate(Treatment = factor(Treatment, levels = c("Control",
+                                          "Treatment")))
 
 tax <- "tax.rds" %>% 
   paste0(data.folder, "/", .) %>% 
@@ -137,16 +137,16 @@ micro.test.dist <-  micro.test %>%
 adonis2(micro.test.dist ~ Ind + Visit, data = meta.test, by = "terms")}
 ```
 
-## AtopiControl
+## Treatment
 
 ```{r}
-test.adonis(meta, micro, "AtopiControl")
+test.adonis(meta, micro, "Treatment")
 ```
 
 ## Untreat
 
 ```{r}
-test.adonis(meta, micro, "Untreated")
+test.adonis(meta, micro, "Control")
 ```
 
 # Visualize beta diversity
